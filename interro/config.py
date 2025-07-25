@@ -4,36 +4,58 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 DEFAULT_CONFIG = {
-    "indexing": {
-        "file_extensions": [".py", ".js", ".ts", ".java", ".cpp", ".c", ".h"],
-        "exclude_dirs": [
-            "__pycache__", ".git", "node_modules", ".venv", "venv", 
-            "build", "dist", ".pytest_cache", ".mypy_cache"
-        ],
-        "exclude_files": ["*.pyc", "*.pyo", "*.pyd", ".DS_Store"],
-        "max_file_size_mb": 5,
-        "chunk_size": 1000,
-        "chunk_overlap": 200
+    'retrieval': {
+        'max_results': 3,  # Always return top 3 for quality
+        'force_keyword_only': False,  # Set True to disable semantic search entirely
+        'use_semantic_search': True,  # Enable/disable semantic search
+        'similarity_threshold': 0.2,  # Lower = more results, higher = more precise
+        'keyword_weight': 0.4,  # Weight for keyword/TF-IDF results
+        'semantic_weight': 0.3,  # Weight for semantic results
+        'pattern_weight': 0.3,  # Weight for pattern-based results
     },
-    "retrieval": {
-        "max_results": 10,
-        "similarity_threshold": 0.7,
-        "use_semantic_search": True,
-        "keyword_weight": 0.3,
-        "semantic_weight": 0.7
+
+    # Indexing settings
+    'indexing': {
+        'chunk_size': 800,  # Smaller chunks for better precision
+        'chunk_overlap': 100,
+        'max_file_size_mb': 5,
+        'file_extensions': ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h'],
+        'exclude_dirs': ['__pycache__', '.git', 'node_modules', '.venv', 'venv'],
+        'exclude_files': ['*.pyc', '*.log', '*.tmp'],
     },
-    "llm": {
-        "enabled": False,
-        "model": "llama3",
-        "max_tokens": 500,
-        "temperature": 0.1
+
+    # Performance tuning
+    'performance': {
+        'enable_caching': True,  # Cache embeddings for speed
+        'parallel_workers': 4,   # Number of parallel embedding workers
+        'embedding_timeout': 5,  # Timeout for embedding requests
+        'max_embed_length': 1000,  # Max text length for embedding
     },
-    "output": {
-        "format": "rich",  # rich, json, plain
-        "show_line_numbers": True,
-        "context_lines": 5,
-        "highlight_syntax": True
-    }
+
+    # Output formatting
+    'output': {
+        'show_explanations': True,  # Show why each result was selected
+        'show_confidence': True,    # Show confidence scores
+        'show_highlights': False,   # Disable highlights for cleaner output
+        'verbose_search': True,     # Show search progress
+    },
+    'retrieval.max_results': 3,  # Only show top 3 quality results
+    'retrieval.use_semantic_search': True,  # Enable semantic search for better understanding
+    'retrieval.similarity_threshold': 0.2,  # Higher threshold for quality
+    'retrieval.keyword_weight': 0.6,
+    'retrieval.semantic_weight': 0.8,
+    
+    # === INDEXING SETTINGS ===
+    'indexing.chunk_size': 800,  # Smaller chunks for better focus
+    'indexing.chunk_overlap': 100,
+    'indexing.max_file_size_mb': 3,  # Skip very large files
+    'indexing.file_extensions': ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h'],
+    'indexing.exclude_dirs': ['node_modules', '__pycache__', '.git', 'venv', '.venv'],
+    'indexing.exclude_files': ['*.pyc', '*.log', '*.tmp'],
+    
+    # === PERFORMANCE SETTINGS ===
+    # Set to True for maximum speed (keyword + TF-IDF only)
+    'retrieval.skip_semantic_for_speed': False,
 }
 
 class Config:
