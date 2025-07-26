@@ -12,7 +12,7 @@ from .retriever import CodeRetriever
 from .llm_agent import LLMAgent
 from .formatter import ResultFormatter
 
-app = typer.Typer(help="🧠 interro - AI-powered code understanding tool")
+app = typer.Typer(help=" interro - AI-powered code understanding tool")
 console = Console()
 
 @app.command()

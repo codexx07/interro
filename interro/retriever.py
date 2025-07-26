@@ -12,6 +12,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import pickle
+import hashlib
+import pickle
+from pathlib import Path
 import os
 
 @dataclass
@@ -22,20 +25,30 @@ class SearchResult:
     highlights: List[Tuple[int, int]] = None
 
 class CodeRetriever:
-    def __init__(self, config, indexed_files: List[IndexedFile]):
+    def __init__(self, config, indexed_files: List[IndexedFile], project_path: str = "."):
         self.config = config
         self.indexed_files = indexed_files
         self.all_chunks = []
+        self.project_path = os.path.abspath(project_path)  # ✅ this was missing
 
         for file in indexed_files:
             self.all_chunks.extend(file.chunks)
 
+        self.embedding_cache_file = self._get_cache_path()
         self.embeddings = None
-        self.embedding_cache_file = ".embeddings_cache.pkl"
-        
-        # Fast initialization - only do embeddings if explicitly enabled and not cached
+        self.semantic_chunks = []
+
         if config.get('retrieval.use_semantic_search', True):
             self._initialize_semantic_search_fast()
+
+
+    def _get_cache_path(self) -> Path:
+        """Create ~/.interro/ directory and return project-specific cache path"""
+        cache_dir = Path.home() / ".interro"
+        cache_dir.mkdir(exist_ok=True)
+        project_hash = hashlib.sha256(self.project_path.encode()).hexdigest()[:12]
+        return cache_dir / f"embeddings_{project_hash}.pkl"
+
 
     def _get_cache_key(self, text: str) -> str:
         """Generate cache key for text"""
@@ -95,7 +108,7 @@ class CodeRetriever:
             return embeddings
             
         except Exception as e:
-            print(f"❌ Batch embedding failed: {e}")
+            print(f" × Batch embedding failed: {e}")
             return [[] for _ in texts]
 
     def _embed_text_parallel(self, texts: List[str], max_workers: int = 4) -> List[List[float]]:
@@ -140,88 +153,93 @@ class CodeRetriever:
         return embeddings
 
     def _initialize_semantic_search_fast(self):
-        """Fast initialization with caching and batching"""
-        print("🚀 Fast semantic search initialization...")
-        
-        # Check if we should skip semantic search for speed
+        """Fast initialization with per-project caching, dedup, and embedding"""
+        print("● Fast semantic search initialization...")
+
         if self.config.get('retrieval.skip_semantic_for_speed', False):
-            print("⚡ Skipping semantic search for maximum speed")
+            print("● Skipping semantic search for speed")
             return
-        
-        # Test Ollama connection quickly
+
+        # Check Ollama status
         try:
+            import requests
             response = requests.get('http://localhost:11434/api/tags', timeout=2)
             if response.status_code != 200:
-                print("⚡ Ollama not responding - using keyword-only search for speed")
+                print("● Ollama not responding — fallback to keyword-only search")
                 return
-        except:
-            print("⚡ Cannot connect to Ollama - using keyword-only search")
+        except Exception:
+            print("● Cannot connect to Ollama — fallback to keyword-only search")
             return
-        
-        # Load existing cache
-        cache = self._load_embedding_cache()
-        print(f"📦 Loaded {len(cache)} cached embeddings")
-        
-        # Identify chunks that need embedding
+
+        # Get per-project cache path
+        self.embedding_cache_file = self._get_cache_path()
+
+        # Load cache (if exists)
+        if self.embedding_cache_file.exists():
+            with open(self.embedding_cache_file, "rb") as f:
+                cache = pickle.load(f)
+            print(f" ✓ Loaded {len(cache)} cached embeddings")
+        else:
+            cache = {}
+            print(" ● No embedding cache found — will compute fresh embeddings")
+
         texts_to_embed = []
         chunk_indices = []
-        
+
         for i, chunk in enumerate(self.all_chunks):
             if chunk.embedding:
-                continue  # Already has embedding
-                
+                continue
+
             embed_text = self._create_embed_text(chunk)
             cache_key = self._get_cache_key(embed_text)
-            
+
             if cache_key in cache:
                 chunk.embedding = cache[cache_key]
             else:
                 texts_to_embed.append(embed_text)
                 chunk_indices.append(i)
-        
-        print(f"🔄 Need to embed {len(texts_to_embed)} new chunks")
-        
+
+        print(f"→ Need to embed {len(texts_to_embed)} new chunks")
+
         if texts_to_embed:
-            # Batch/parallel embedding for speed
             if len(texts_to_embed) > 10:
-                print("⚡ Using parallel embedding...")
+                print("● Using parallel embedding...")
                 new_embeddings = self._embed_text_parallel(texts_to_embed, max_workers=4)
             else:
-                print("⚡ Using batch embedding...")
+                print("● Using batch embedding...")
                 new_embeddings = self._embed_text_batch(texts_to_embed)
-            
-            # Update chunks and cache
+
             cache_updated = False
             for i, embedding in enumerate(new_embeddings):
                 if embedding:
-                    chunk_idx = chunk_indices[i]
-                    self.all_chunks[chunk_idx].embedding = embedding
-                    
-                    # Update cache
-                    embed_text = texts_to_embed[i]
-                    cache_key = self._get_cache_key(embed_text)
-                    cache[cache_key] = embedding
+                    idx = chunk_indices[i]
+                    self.all_chunks[idx].embedding = embedding
+
+                    key = self._get_cache_key(texts_to_embed[i])
+                    cache[key] = embedding
                     cache_updated = True
-            
+
             if cache_updated:
-                self._save_embedding_cache(cache)
-                print("💾 Updated embedding cache")
-        
-        # Build embedding matrix
-        valid_embeddings = []
+                with open(self.embedding_cache_file, "wb") as f:
+                    pickle.dump(cache, f)
+                print(f" ✓ Updated embedding cache → {self.embedding_cache_file}")
+
+        # Filter valid
         self.semantic_chunks = []
-        
+        valid_embeddings = []
+
         for chunk in self.all_chunks:
             if chunk.embedding and len(chunk.embedding) > 0:
                 valid_embeddings.append(chunk.embedding)
                 self.semantic_chunks.append(chunk)
-        
+
         if valid_embeddings:
             self.embeddings = np.array(valid_embeddings, dtype=np.float32)
-            print(f"✅ Ready with {len(valid_embeddings)} embeddings")
+            print(f"✓ Ready with {len(valid_embeddings)} semantic embeddings")
         else:
-            print("⚡ No embeddings available - using keyword-only search")
+            print(" → No usable embeddings — fallback to keyword-only search")
             self.embeddings = None
+
 
     def _create_embed_text(self, chunk: CodeChunk) -> str:
         """Create concise text for embedding"""
@@ -329,7 +347,7 @@ class CodeRetriever:
             return results
             
         except Exception as e:
-            print(f"❌ Fast semantic search failed: {e}")
+            print(f" × Fast semantic search failed: {e}")
             return []
 
     def _embed_text_simple(self, text: str) -> List[float]:
